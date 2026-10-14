@@ -92,6 +92,17 @@ I verified the harness against scripted stand-in agents: one that obeys everythi
 
 Other limits are worth stating plainly. A benign canary is a lower bar than a hostile payload: an agent can ignore a strange request for a file and still obey a harmful one. One task prompt exercises one slice of behavior. And process-group handling means Linux and macOS only.
 
+## Update: version 0.2
+
+The first release answered "does it obey?" for one configuration. The question people actually ask is "did my change help?", so 0.2 adds:
+
+- **`compare`**, which sets two result files side by side and runs an exact test per channel. A useful sense of scale: with five runs per side, 0 of 5 versus 4 of 5 gives p = 0.048, and 0 of 5 versus 3 of 5 gives p = 0.17. Small experiments only detect big differences, which is worth knowing before you conclude that a sandbox "didn't matter."
+- **Five more channels**: documentation of a vendored dependency, package metadata, a CI comment, the message of a failing test, and the git commit message. Several of these are places a stranger's text can reach your agent without ever appearing in the files you would think to review.
+- **Custom channels**, loaded from JSON, with paths confined to the repository.
+- **`--jobs`, `--dry-run`, markdown output, and a `selftest` command.**
+
+One more lesson came from this release. In 0.1 the demo stand-in agent lived outside the installable package, so the quick-start in the README worked from a clone and could not work after `pip install`. I found that while reviewing the packaging, not from a bug report. I fixed it by moving the stand-in into the package, and I verified the fix the way a stranger would hit it: a fresh virtual environment, `pip install`, then `agent-canary selftest` from a different directory. If your documentation has a command in it, run that command from outside your source tree.
+
 ## Takeaways
 
 1. Replace "it depends" with a measurement of your own setup, one channel at a time.

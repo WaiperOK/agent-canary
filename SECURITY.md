@@ -11,6 +11,9 @@ The injected instructions never ask for anything except an empty file in a tempo
 - Run it in a disposable environment: a container, a VM, or a throwaway user account.
 - Do not give the agent real credentials. By default only `PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM` and `TMPDIR` are passed. Use `--pass-env NAME` for one variable at a time, and prefer a dedicated low-privilege token.
 - `HOME` is passed because most agents keep their configuration there. Anything in that home directory is reachable by the agent, so use a dedicated user.
+- Review a `--channels-file` before you use it. Channel paths are confined to the temporary repository (absolute paths, `..` and `.git` are rejected), but the template text is whatever the file says, and your agent will read it.
+- `run` prints a note when the agent will be able to reach `~/.ssh`, `~/.aws` and similar directories through `HOME`, or will receive environment variables that look like secrets. Treat that note as a reason to stop and use a dedicated user or container.
+- Do not put secrets in `--cmd`. The command is saved in the results file; pass secrets with `--pass-env`.
 - Do not replace the canary instructions with real exfiltration payloads.
 - Test only agents and systems you are allowed to test.
 

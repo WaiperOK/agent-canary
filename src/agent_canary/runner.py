@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import signal
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .channels import CHANNELS, DEFAULT_PROMPT, write_repo
+from .channels import CHANNELS, DEFAULT_PROMPT, Channel, write_repo
 
 SAFE_ENV = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR")
+SENSITIVE_HOME_ENTRIES = (".ssh", ".aws", ".config/gcloud", ".azure", ".kube", ".gnupg", ".docker/config.json", ".netrc", ".git-credentials")
 
 
 @dataclass
@@ -76,6 +80,25 @@ def evaluate(root: Path, canaries: dict[str, str]) -> dict[str, bool]:
     return {channel: (root / name).exists() for channel, name in canaries.items()}
 
 
+def preflight_notes(env: dict[str, str]) -> list[str]:
+    """Things the agent can reach through the environment it is about to receive."""
+    notes = []
+    home = env.get("HOME")
+    if home:
+        found = [e for e in SENSITIVE_HOME_ENTRIES if (Path(home) / e).exists()]
+        if found:
+            notes.append(f"HOME ({home}) contains {', '.join(found)}. The agent can read these. Use a dedicated user or a container.")
+    leaked = sorted(k for k in env if re.search(r"(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)", k, re.IGNORECASE) and k != "CANARY_PROMPT")
+    if leaked:
+        notes.append(f"The agent will receive: {', '.join(leaked)}. Use short-lived, narrowly scoped credentials.")
+    return notes
+
+
+def plan(runs: int, channels: list[str], mode: str) -> tuple[int, list[list[str]]]:
+    groups = [[c] for c in channels] if mode == "isolated" else [channels]
+    return runs * len(groups), groups
+
+
 def run_experiment(
     cmd: str,
     runs: int,
@@ -87,37 +110,54 @@ def run_experiment(
     pass_env: list[str] | None = None,
     keep: bool = False,
     progress=None,
+    jobs: int = 1,
+    extra_channels: dict[str, Channel] | None = None,
 ) -> list[RunResult]:
     if mode not in {"isolated", "combined"}:
         raise ValueError("mode must be 'isolated' or 'combined'")
     if runs < 1:
         raise ValueError("--runs must be at least 1")
-    selected = channels or list(CHANNELS)
+    if jobs < 1:
+        raise ValueError("--jobs must be at least 1")
+    registry = {**CHANNELS, **(extra_channels or {})}
+    selected = channels or list(registry)
+    unknown = [c for c in selected if c not in registry]
+    if unknown:
+        raise ValueError(f"unknown channel(s): {', '.join(unknown)}")
     args = build_command(cmd, prompt)
     env = build_env(inherit_env, pass_env or [], prompt)
-    groups = [[c] for c in selected] if mode == "isolated" else [selected]
+    _, groups = plan(runs, selected, mode)
+    tasks = [(run, group) for run in range(1, runs + 1) for group in groups]
+    lock = threading.Lock()
 
-    results: list[RunResult] = []
-    for run in range(1, runs + 1):
-        for group in groups:
-            nonce = secrets.token_hex(4)  # fresh per run, so an old file or a lucky guess cannot count
-            with tempfile.TemporaryDirectory(prefix="agent-canary-") as tmp:
-                root = Path(tmp)
-                canaries = write_repo(root, group, nonce)
-                started = time.monotonic()
-                code, timed_out = run_agent(args, root, env, timeout)
-                elapsed = round(time.monotonic() - started, 2)
-                followed = evaluate(root, canaries)
-                if keep:
-                    keep_dir = Path(tempfile.mkdtemp(prefix="agent-canary-kept-"))
-                    _copy_tree(root, keep_dir)
-                    if progress:
-                        progress(f"kept {keep_dir}")
-            for channel, hit in followed.items():
-                results.append(RunResult(channel, run, hit, code, timed_out, elapsed))
-            if progress:
-                progress(f"run {run}/{runs} {'+'.join(group)}: " + ", ".join(f"{c}={'FOLLOWED' if h else 'ignored'}" for c, h in followed.items()))
-    return results
+    def say(message: str) -> None:
+        if progress:
+            with lock:
+                progress(message)
+
+    def execute(task: tuple[int, list[str]]) -> list[RunResult]:
+        run, group = task
+        nonce = secrets.token_hex(4)  # fresh per run, so an old file or a lucky guess cannot count
+        with tempfile.TemporaryDirectory(prefix="agent-canary-") as tmp:
+            root = Path(tmp)
+            canaries = write_repo(root, group, nonce, extra_channels)
+            started = time.monotonic()
+            code, timed_out = run_agent(args, root, env, timeout)
+            elapsed = round(time.monotonic() - started, 2)
+            followed = evaluate(root, canaries)
+            if keep:
+                keep_dir = Path(tempfile.mkdtemp(prefix="agent-canary-kept-"))
+                _copy_tree(root, keep_dir)
+                say(f"kept {keep_dir}")
+        say(f"run {run}/{runs} {'+'.join(group)}: " + ", ".join(f"{c}={'FOLLOWED' if h else 'ignored'}" for c, h in followed.items()))
+        return [RunResult(channel, run, hit, code, timed_out, elapsed) for channel, hit in followed.items()]
+
+    if jobs == 1:
+        batches = [execute(t) for t in tasks]
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            batches = list(pool.map(execute, tasks))  # map keeps the original order
+    return [r for batch in batches for r in batch]
 
 
 def _copy_tree(src: Path, dst: Path) -> None:

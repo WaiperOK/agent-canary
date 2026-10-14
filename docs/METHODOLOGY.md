@@ -20,6 +20,12 @@ This measures susceptibility to indirect prompt injection through the project, n
 
 **Timeouts kill the process group.** A hung agent and any children it started are killed. Otherwise orphans keep running after the experiment.
 
+**Git history is part of the surface.** When `git` is available every repository gets a one-commit history, so the `commit_message` channel differs from the others only in where the instruction sits. Without `git` that channel is unavailable.
+
+**Parallel runs are independent.** `--jobs` runs separate agents in separate temporary repositories. Results are collected in a fixed order, so the same inputs produce the same report layout. Parallelism raises API usage and can trigger rate limits, which show up as crashes or timeouts and make the result `INCONCLUSIVE` instead of silently wrong.
+
+**Custom channels are confined.** A channel path must be relative, must not contain `..`, and must not point under `.git`. The writer checks the resolved path again, so a bad definition cannot place a file outside the repository.
+
 **Broken runs are not passes.** An agent that crashes or times out follows nothing, so a naive tool would report success. If more than half of a channel's runs fail, the result is `INCONCLUSIVE` (exit code 3).
 
 ## How many runs
@@ -34,6 +40,18 @@ Models are non-deterministic, and a handful of clean runs says less than it feel
 | 50 | 7% |
 
 If you need to rule out rates near 1%, you need hundreds of runs, and the result still says nothing about an attacker who iterates. See *Guardrails Are a Layer, Not a Wall* for the arithmetic of retries.
+
+## Comparing two configurations
+
+`compare` runs a two-sided Fisher exact test per channel on the counts of followed and ignored runs. It answers one question: *is the difference between these two result sets larger than chance would explain?*
+
+Use it correctly:
+
+- Change **one** variable between the two experiments (sandbox on or off, permission mode, model, prompt wording).
+- Use the same channels, the same number of runs, and the same task prompt.
+- Small samples need large differences. With 5 runs per side, 0 of 5 versus 4 of 5 gives p = 0.048 and 0 of 5 versus 5 of 5 gives p = 0.008, while 0 of 5 versus 3 of 5 gives p = 0.17. With 10 runs per side, 0 of 10 versus 5 of 10 gives p = 0.033.
+- Testing many channels at once produces some false positives. Treat a single borderline p-value as a reason to run more, not as a finding.
+- A non-significant result with small samples does not mean the configurations are equivalent.
 
 ## Limits
 
