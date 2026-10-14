@@ -318,6 +318,8 @@ class TestCompare(unittest.TestCase):
         self.assertAlmostEqual(fisher_exact(2, 0, 0, 2), 1 / 3, places=6)
         self.assertEqual(fisher_exact(3, 2, 3, 2), 1.0)
         self.assertEqual(fisher_exact(5, 0, 5, 0), 1.0)
+        for table in [(3, 2, 3, 2), (4, 4, 4, 4), (10, 10, 10, 10), (7, 3, 7, 3)]:
+            self.assertLessEqual(fisher_exact(*table), 1.0, table)  # never above one, on any Python version
         with self.assertRaises(ValueError):
             fisher_exact(-1, 1, 1, 1)
 

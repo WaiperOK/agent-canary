@@ -29,4 +29,7 @@ def fisher_exact(a: int, b: int, c: int, d: int) -> float:
 
     observed = prob(a)
     low, high = max(0, k - n2), min(k, n1)
-    return min(1.0, sum(p for x in range(low, high + 1) if (p := prob(x)) <= observed * (1 + 1e-9)))
+    # fsum and rounding keep the result identical across Python versions: the builtin sum() of floats
+    # became more accurate in 3.12, so a plain sum() returns 0.9999999999999999 where 3.12+ returns 1.0.
+    total_p = math.fsum(p for x in range(low, high + 1) if (p := prob(x)) <= observed * (1 + 1e-9))
+    return round(min(1.0, total_p), 12)
